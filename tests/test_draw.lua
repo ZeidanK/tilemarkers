@@ -329,4 +329,72 @@ Draw.Reset()
 for _, shape in ipairs(submitted) do
     expect(shape.destroyed, true, "reset cleans up both rendering modes")
 end
+-- A grid must not split marker edges or join their dynamic customization group.
+submitted = {}
+west = marker(westCoord, 0x112233FF)
+east = marker(eastCoord, 0xFFFFFF59)
+east.isGrid = true
+east.fill = false
+east.outlineThickness = 1
+assert(Draw.Sync{ west, east })
+local gridShape = shapeWithLines(eastCoord, 8)
+expect(#shapesAt(westCoord), 1, "marker beside grid keeps a complete outline")
+expect(#shapesAt(eastCoord), 1, "grid beside marker keeps a complete outline")
+expect(#gridShape.shapeData.tris, 0, "grid contains no fill geometry")
+expect(gridShape.shapeData.rgba[1], 0xFFFFFF59, "grid uses its colour and opacity")
+local builds, uploads, samples, projections = stats.builds, stats.uploads, stats.samples, stats.projections
+assert(Draw.Sync{ west, east })
+Draw.UpdateCamera()
+expect(stats.builds, builds, "unchanged grid builds no geometry")
+expect(stats.uploads, uploads, "unchanged grid uploads no geometry")
+expect(stats.samples, samples, "unchanged grid samples no terrain")
+expect(stats.projections, projections, "grid edges need no camera projections")
+west.customizing = true
+assert(Draw.Sync{ west, east })
+expect(shapeWithLines(eastCoord, 8), gridShape, "marker customization retains adjacent grid entity")
+expect(gridShape.kind, "entity", "grid stays fixed beside customization")
+west.customizing = false
+east.outlineColour = 0x00000059
+assert(Draw.Sync{ west, east })
+expect(gridShape.shapeData.rgba[1], 0x00000059, "black grid retains colour and opacity")
+east.outlineColour = 0x00FF0059
+assert(Draw.Sync{ west, east })
+expect(gridShape.shapeData.rgba[1], 0x00FF0059, "zero-red grid colours stay RGBA")
+east.outlineColour = 0
+assert(Draw.Sync{ west, east })
+expect(gridShape.shapeData.rgba[1], 0, "transparent black stays transparent")
+
+-- Sliding the grid retains overlapping shapes and creates only the new edge.
+Draw.Reset()
+submitted = {}
+local function gridTile(x)
+    local tile = marker(coord(x, 100), 0xFFFFFF59)
+    tile.isGrid = true
+    return tile
+end
+local first, middle, last = gridTile(100), gridTile(101), gridTile(102)
+assert(Draw.Sync{ first, middle })
+local firstShape = shapeWithLines(first.coordGrid, 8)
+local middleShape = shapeWithLines(middle.coordGrid, 8)
+uploads = stats.uploads
+assert(Draw.Sync{ middle, last })
+expect(firstShape.destroyed, true, "movement deletes tiles leaving grid")
+expect(shapeWithLines(middle.coordGrid, 8), middleShape, "movement retains overlapping grid shape")
+expect(stats.uploads, uploads + 1, "movement uploads only entering grid tile")
+assert(Draw.Sync{})
+expect(middleShape.destroyed, true, "disabling destroys retained grid shape")
+
+local ground = World.GetGroundHeight
+local terrainAvailable = false
+World.GetGroundHeight = function(...)
+    if not terrainAvailable then return 0, false end
+    return ground(...)
+end
+assert(not Draw.Sync{ first }, "unavailable grid terrain requests retry")
+expect(#shapesAt(first.coordGrid), 0, "unavailable terrain creates no grid shape")
+terrainAvailable = true
+assert(Draw.Sync{ first }, "grid recovers when terrain loads")
+expect(#shapesAt(first.coordGrid), 1, "terrain retry creates grid shape")
+World.GetGroundHeight = ground
+Draw.Reset()
 print("test_draw: ok")

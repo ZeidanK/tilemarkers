@@ -1,5 +1,6 @@
 local Tiles = require("src/tiles")
 local Draw = require("src/draw")
+local Grid = require("src/grid")
 local Minimenu = require("src/minimenu")
 local Presets = require("src/presets")
 local PresetEditor = require("src/preset_editor")
@@ -18,10 +19,12 @@ local boundsX, boundsZ, boundsWidth, boundsHeight
 
 local function resetMarkers()
     Draw.Reset()
+    Grid.clear()
     RegionBindings.clear()
     residentTiles = {}
     residentAnchor = nil
     UI.renderTiles = nil
+    UI.renderGrid = nil
     UI.markerLabels = {}
 end
 
@@ -235,7 +238,8 @@ Event.Logic.Subscribe(EVENT_ID, function()
         tilesRevision, presetsRevision, editorRevision =
             Tiles.revision, Presets.revision, PresetEditor.revision
     end
-    UI:syncMarkers(residentTiles, Minimenu.getHover(), DRAW_DISTANCE_FINE)
+    local gridCoords = Grid.query(coord, DRAW_DISTANCE, UI.gridEnabled)
+    UI:syncMarkers(residentTiles, Minimenu.getHover(), DRAW_DISTANCE_FINE, gridCoords)
 end)
 
 Event.Draw.Subscribe(EVENT_ID, function()
@@ -292,5 +296,6 @@ function PluginShutdown()
     PresetEditor:cancel()
     Event.GameStateChanged.Unsubscribe(EVENT_ID)
     UI:shutdown()
+    Grid.clear()
     Draw.Reset()
 end

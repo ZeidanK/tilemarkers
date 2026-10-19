@@ -987,8 +987,10 @@ expect(previousSettings.destroyed, true, "reopening settings releases the previo
 expect(UI.contentView, previousContent, "reopening settings keeps preset content")
 expect(previousContent.destroyed, nil, "settings remount does not destroy preset content")
 local remountedOptions = UI.settingsView.addedComponents[1].entries
-expect(remountedOptions[3].selected, false, "reopening settings preserves fill changes")
-expect(remountedOptions[4].selected, true, "reopening settings preserves corner changes")
+local remountedSelections = {}
+for _, option in ipairs(remountedOptions) do remountedSelections[option.value] = option.selected end
+expect(remountedSelections.fill, false, "reopening settings preserves fill changes")
+expect(remountedSelections.outlineCornersOnly, true, "reopening settings preserves corner changes")
 expect(UI.canvas, previousCanvas, "reopening settings keeps the marker canvas")
 expect(UI.presetEditOverlay, failedSaveOverlay, "reopening settings keeps active preset editing")
 local remountedSettings = UI.settingsView

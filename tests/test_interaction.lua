@@ -337,6 +337,7 @@ local RegionBindings = {
 
 local drawnHover
 local drawnTiles
+local drawnGrid
 local promptOpen = false
 local hoverPreviewEnabled = true
 local promptedInitialLabel
@@ -371,9 +372,10 @@ local UI = {
         initializedPresetHandlers = handlers
     end,
     ensureMounted = function() return true end,
-    syncMarkers = function(_, tiles, tile)
+    syncMarkers = function(_, tiles, tile, _, grid)
         drawnTiles = tiles
         drawnHover = tile
+        drawnGrid = grid
     end,
     drawLabels = function() end,
     getStyle = function()
@@ -436,6 +438,40 @@ end
 
 frame()
 equal(nil, drawnHover, "hover is hidden without both modifiers")
+equal(nil, drawnGrid, "main does not generate grid while disabled")
+UI.gridEnabled = true
+frame()
+equal(61 * 61, #drawnGrid, "main supplies nearby grid separately")
+do
+    local initialGrid = drawnGrid
+    local initialMarkers = drawnTiles
+    frame()
+    equal(initialGrid, drawnGrid, "stationary logic reuses grid coordinates")
+    equal(initialMarkers, drawnTiles, "enabling grid preserves marker query cache")
+    playerCoord = { name = "player", level = 0, x = 11, z = 10 }
+    frame()
+    assert(drawnGrid ~= initialGrid, "one-tile movement updates grid immediately")
+    equal(initialMarkers, drawnTiles, "grid movement does not rebuild marker resident set")
+    initialGrid = drawnGrid
+    callbacks.RegionUpdated()
+    frame()
+    assert(drawnGrid ~= initialGrid, "region update regenerates grid")
+    initialGrid = drawnGrid
+    callbacks.RegionCreated()
+    frame()
+    assert(drawnGrid ~= initialGrid, "new region regenerates grid")
+    playerCoord = { name = "player", level = 1, x = 11, z = 10 }
+    frame()
+    equal(1, drawnGrid[1].level, "main regenerates grid on new floor")
+    playerCoord = { name = "player", level = 0, x = 10, z = 10 }
+    UI.gridEnabled = false
+    frame()
+    equal(nil, drawnGrid, "main removes grid when disabled")
+    UI.gridEnabled = true
+    frame()
+    -- Keep enabled for the existing mark/unmark, preset and bulk-action tests.
+    equal(61 * 61, #drawnGrid, "main restores grid when enabled again")
+end
 controlDown = true
 shiftDown = true
 frame()
@@ -853,4 +889,13 @@ playerPosition.x = playerPosition.x + 1
 callbacks.Draw()
 equal(nil, renderedLabel, "sub-tile player movement past the boundary hides the label")
 
+do
+    local previousGrid = drawnGrid
+    callbacks.GameStateChanged({ newState = 0 })
+    frame()
+    assert(drawnGrid ~= previousGrid, "logout clears grid cache before returning to game")
+    PluginShutdown()
+    local afterShutdown = require("src/grid").query(playerCoord, 30, true)
+    assert(afterShutdown ~= drawnGrid, "shutdown clears grid coordinate cache")
+end
 print("test_interaction: ok")

@@ -17,6 +17,10 @@ local HOVER_PREVIEW_STORAGE_KEY = "markerHoverPreview"
 local FILL_STORAGE_KEY = "markerFill"
 local OUTLINE_CORNERS_STORAGE_KEY = "markerOutlineCornersOnly"
 local MARKING_KEYBIND_STORAGE_KEY = "markerKeybind"
+local GRID_ENABLED_STORAGE_KEY = "gridEnabled"
+local GRID_COLOUR_STORAGE_KEY = "gridOutlineColour"
+local GRID_THICKNESS_STORAGE_KEY = "gridOutlineThicknessTenths"
+local DEFAULT_GRID_COLOUR = 0xFFFFFF59
 local DEFAULT_MARKING_KEYBIND = { GameKey.CONTROL, GameKey.SHIFT }
 local EMPTY_HOVER_STYLE = {
     outlineColour = 0xFFFFFF90,
@@ -203,12 +207,17 @@ function UI:init(presetHandlers, prettyUILibrary, drawLibrary)
         "Tile Markers requires the prettyui dependency to be enabled first")
     self.renderer = drawLibrary or Draw
     self.renderTiles = nil
+    self.renderGrid = nil
     self.renderSettings = nil
     self.canvasHasLabels = false
     self.markerLabels = {}
     self.recentColours = parseRecentColours(
         PersistentDB:GetString(RECENT_COLOURS_STORAGE_KEY))
     self.ignoreDepth = PersistentDB:GetBool(IGNORE_DEPTH_STORAGE_KEY) == true
+    self.gridEnabled = PersistentDB:GetBool(GRID_ENABLED_STORAGE_KEY) == true
+    self.gridColour = PersistentDB:GetInt(GRID_COLOUR_STORAGE_KEY) or DEFAULT_GRID_COLOUR
+    self.gridThickness = clamp(
+        (PersistentDB:GetInt(GRID_THICKNESS_STORAGE_KEY) or 10) / 10, 0.5, 10.0)
     self.hoverPreviewEnabled =
         PersistentDB:GetBool(HOVER_PREVIEW_STORAGE_KEY) ~= false
     self.markingKeybind =
@@ -246,6 +255,7 @@ function UI:reset()
     end
     self.canvas = nil
     self.renderTiles = nil
+    self.renderGrid = nil
     self.renderSettings = nil
     self.canvasHasLabels = false
     self.markerLabels = {}
@@ -321,6 +331,9 @@ function UI:destroySettings()
     self.colourPicker = nil
     self.thicknessText = nil
     self.thicknessSlider = nil
+    self.gridColourPicker = nil
+    self.gridThicknessText = nil
+    self.gridThicknessSlider = nil
     self.labelSizeCombo = nil
 end
 
@@ -587,6 +600,10 @@ function UI:updateStyleControls()
         self.thicknessText.content = string.format(
             "Outline thickness: %.1f", self.outlineThickness)
     end
+    if self.gridThicknessText ~= nil then
+        self.gridThicknessText.content = string.format(
+            "Grid outline thickness: %.1f", self.gridThickness)
+    end
 end
 function UI:isHoverPreviewEnabled()
     return self.hoverPreviewEnabled ~= false
@@ -635,6 +652,12 @@ function UI:mountSettings(parent)
             tooltip = "Preview the tile under the cursor while the marking keybind is held.",
         },
         {
+            text = "Show all nearby tiles",
+            value = "show_grid",
+            selected = self.gridEnabled,
+            tooltip = "Show a ground grid within 30 tiles on your current floor, without saving markers.",
+        },
+        {
             text = "Render fill",
             value = "fill",
             selected = self.globalStyle.fill,
@@ -656,6 +679,9 @@ function UI:mountSettings(parent)
                 PersistentDB:SetBool(
                     HOVER_PREVIEW_STORAGE_KEY,
                     self.hoverPreviewEnabled)
+            elseif changedValue == "show_grid" then
+                self.gridEnabled = selected == true
+                PersistentDB:SetBool(GRID_ENABLED_STORAGE_KEY, self.gridEnabled)
             elseif changedValue == "fill" or changedValue == "outlineCornersOnly" then
                 self.globalStyle[changedValue] = selected == true
                 local key = changedValue == "fill"
@@ -702,6 +728,45 @@ function UI:mountSettings(parent)
             PersistentDB:SetInt(
                 OUTLINE_THICKNESS_STORAGE_KEY,
                 math.floor(self.outlineThickness * 10 + 0.5))
+            self:updateStyleControls()
+        end,
+    })
+    self.settingsView:AddText({
+        text = "Nearby grid colour and opacity",
+        width = 296,
+        height = 32,
+        maxLines = 1,
+    })
+    self.gridColourPicker = self.settingsView:AddColourPicker({
+        inline = true,
+        width = 40,
+        height = 32,
+        value = self.gridColour,
+        alphaSlider = true,
+        windowTitle = "Nearby grid colour",
+        tooltip = "Choose the grid outline colour and opacity independently of markers.",
+        onChange = function(_, colour)
+            self.gridColour = colour
+            PersistentDB:SetInt(GRID_COLOUR_STORAGE_KEY, colour)
+        end,
+    })
+    self.gridThicknessText = self.settingsView:AddText({
+        text = "",
+        width = 344,
+        height = 32,
+        alignHorizontal = ui.AlignMode.CENTRE,
+        maxLines = 1,
+    })
+    self.gridThicknessSlider = self.settingsView:AddSlider({
+        min = 0.5,
+        max = 10,
+        step = 0.5,
+        value = self.gridThickness,
+        tooltip = "Set the outline thickness for the nearby grid only.",
+        onChange = function(_, value)
+            self.gridThickness = clamp(value, 0.5, 10.0)
+            PersistentDB:SetInt(
+                GRID_THICKNESS_STORAGE_KEY, math.floor(self.gridThickness * 10 + 0.5))
             self:updateStyleControls()
         end,
     })
@@ -1496,11 +1561,15 @@ end
 
 -- Reconcile only when marker data, hover, or rendering options change.
 -- The renderer owns retained shapes; the canvas owns only their labels.
-function UI:syncMarkers(tiles, hover, drawDistance)
+function UI:syncMarkers(tiles, hover, drawDistance, gridCoords)
+    if not self.gridEnabled then gridCoords = nil end
     local hoverLevel = hover and hover.level
     local hoverX = hover and hover.x
     local hoverZ = hover and hover.z
     if self.renderTiles == tiles
+        and self.renderGrid == gridCoords
+        and self.renderGridColour == self.gridColour
+        and self.renderGridThickness == self.gridThickness
         and self.renderHoverLevel == hoverLevel
         and self.renderHoverX == hoverX and self.renderHoverZ == hoverZ
         and self.renderThickness == self.outlineThickness
@@ -1516,13 +1585,21 @@ function UI:syncMarkers(tiles, hover, drawDistance)
     end
 
     local entries = {}
+    local gridStyle = {
+        outlineColour = self.gridColour,
+        fill = false,
+        outlineCornersOnly = false,
+    }
+    for _, coord in ipairs(gridCoords or {}) do
+        entries[gridKey(coord)] = { coord = coord, style = gridStyle, isGrid = true }
+    end
     for coord, metadata in pairs(tiles) do
         entries[gridKey(coord)] = { coord = coord, metadata = metadata }
     end
     if hover ~= nil then
         local key = gridKey(hover)
         local entry = entries[key]
-        if entry ~= nil then
+        if entry ~= nil and not entry.isGrid then
             entry.style = markedHoverStyle(entry.metadata, self.globalStyle)
         else
             entries[key] = { coord = hover, style = EMPTY_HOVER_STYLE }
@@ -1536,11 +1613,12 @@ function UI:syncMarkers(tiles, hover, drawDistance)
         settings[#settings + 1] = {
             coordGrid = entry.coord,
             customizing = entry.metadata and entry.metadata.customizing,
+            isGrid = entry.isGrid == true,
             outlineColour = style.outlineColour,
             fillColour = style.fillColour,
             fill = style.fill,
             outlineCornersOnly = style.outlineCornersOnly,
-            outlineThickness = self.outlineThickness,
+            outlineThickness = entry.isGrid and self.gridThickness or self.outlineThickness,
             ignoreDepth = self.ignoreDepth,
             drawDistance = drawDistance,
         }
@@ -1562,6 +1640,9 @@ function UI:syncMarkers(tiles, hover, drawDistance)
     self.renderSettings = settings
     self.markerLabels = labels
     self.renderTiles = tiles
+    self.renderGrid = gridCoords
+    self.renderGridColour = self.gridColour
+    self.renderGridThickness = self.gridThickness
     self.renderHoverLevel, self.renderHoverX, self.renderHoverZ = hoverLevel, hoverX, hoverZ
     self.renderThickness = self.outlineThickness
     self.renderIgnoreDepth = self.ignoreDepth

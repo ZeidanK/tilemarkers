@@ -261,12 +261,12 @@ end
 local function splitOutlineSides(entry, desired)
     local outline = entry.style.outlineRGBA
     local mask = 0
-    if outline == nil then return mask end
+    if outline == nil or entry.isGrid then return mask end
     for index, side in ipairs(SIDE_ORDER) do
         local offset = NEIGHBOURS[side]
         local neighbour = desired[tileKey(
             entry.level, entry.tileX + offset.x, entry.tileZ + offset.z)]
-        if neighbour ~= nil and neighbour.style.outlineRGBA ~= nil
+        if neighbour ~= nil and not neighbour.isGrid and neighbour.style.outlineRGBA ~= nil
             and neighbour.style.outlineRGBA ~= outline then
             mask = mask | (1 << (index - 1))
         end
@@ -414,6 +414,12 @@ end
 local function normaliseStyle(settings)
     local outlineRGB, outlineAlpha = splitColour(
         settings.outlineColour, 0xFFFFFFFF, settings.outlineOpacity, 1.0)
+    -- Grid colours come from the RGBA picker, including values with a zero red
+    -- byte that the legacy RGB/RGBA heuristic would interpret as plain RGB.
+    if settings.isGrid and settings.outlineColour ~= nil then
+        local rgba = math.floor(settings.outlineColour)
+        outlineRGB, outlineAlpha = (rgba >> 8) & 0xFFFFFF, rgba & 0xFF
+    end
     local fillRGB, fillAlpha = splitColour(
         settings.fillColour or outlineRGB, outlineRGB,
         settings.fillOpacity, DEFAULT_FILL_OPACITY)
@@ -487,6 +493,7 @@ function Draw.Sync(settingsList)
                 }
             end
             entry.style = normaliseStyle(settings)
+            entry.isGrid = settings.isGrid == true
             entry.customizing = settings.customizing == true
             desired[key] = entry
         end
@@ -504,7 +511,7 @@ function Draw.Sync(settingsList)
         -- A preview colour can change both sides of a shared edge. Keep the
         -- immediate neighbours dynamic too, until the customization ends.
         local dynamic = entry.customizing
-        if not dynamic then
+        if not dynamic and not entry.isGrid then
             for _, offset in pairs(NEIGHBOURS) do
                 local neighbour = desired[tileKey(
                     entry.level, entry.tileX + offset.x, entry.tileZ + offset.z)]
